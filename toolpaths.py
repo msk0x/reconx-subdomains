@@ -31,11 +31,15 @@ FALLBACK_PATHS = [
 
 
 # ─── Dynamically Include /home/*/go/bin ────────────────────────────────────
-for path in Path("/home").glob("*/go/bin"):
-    path_str = str(path)
+try:
+    for path in Path("/home").glob("*/go/bin"):
+        path_str = str(path)
 
-    if path_str not in FALLBACK_PATHS:
-        FALLBACK_PATHS.append(path_str)
+        if path_str not in FALLBACK_PATHS:
+            FALLBACK_PATHS.append(path_str)
+
+except Exception:
+    pass
 
 
 # ─── Supported Recon Tooling ───────────────────────────────────────────────
@@ -81,11 +85,18 @@ def get_env() -> Dict[str, str]:
 
     existing_path = env.get("PATH", "")
 
-    valid_dirs = [
-        directory
-        for directory in FALLBACK_PATHS
-        if Path(directory).is_dir()
-    ]
+    valid_dirs = []
+
+    for directory in FALLBACK_PATHS:
+        try:
+            if Path(directory).is_dir():
+                valid_dirs.append(directory)
+
+        except PermissionError:
+            continue
+
+        except Exception:
+            continue
 
     env["PATH"] = ":".join(valid_dirs) + (
         ":" + existing_path if existing_path else ""
@@ -99,7 +110,7 @@ def find_tool(name: str) -> Optional[str]:
     """
     Locate a binary by searching:
     1. system PATH
-    2. fallback Go binary paths
+    2. fallback binary locations
 
     Returns:
         str: absolute binary path
@@ -112,10 +123,17 @@ def find_tool(name: str) -> Optional[str]:
         return found
 
     for base in FALLBACK_PATHS:
-        path = Path(base) / name
+        try:
+            path = Path(base) / name
 
-        if path.is_file():
-            return str(path)
+            if path.is_file():
+                return str(path)
+
+        except PermissionError:
+            continue
+
+        except Exception:
+            continue
 
     return None
 
