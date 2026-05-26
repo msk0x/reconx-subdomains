@@ -197,7 +197,7 @@ python3 main.py -d example.com
 ## Enumeration With Bruteforce
 
 ```bash
-python3 cli.py -d example.com --bruteforce
+python3 main.py -d example.com --bruteforce
 ```
 
 ---
@@ -205,7 +205,7 @@ python3 cli.py -d example.com --bruteforce
 ## Custom DNS Wordlist
 
 ```bash
-python3 cli.py -d example.com --wordlist wordlists/dns.txt
+python3 main.py -d example.com --wordlist wordlists/dns.txt
 ```
 
 ---
