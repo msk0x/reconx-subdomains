@@ -189,7 +189,7 @@ Installing these tools significantly improves enumeration coverage and performan
 ## Basic Enumeration
 
 ```bash
-python3 cli.py -d example.com
+python3 main.py -d example.com
 ```
 
 ---
