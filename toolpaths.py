@@ -38,7 +38,7 @@ try:
         if path_str not in FALLBACK_PATHS:
             FALLBACK_PATHS.append(path_str)
 
-except Exception:
+except (PermissionError, OSError):
     pass
 
 
@@ -49,6 +49,7 @@ KNOWN_TOOLS = {
     "anew",
     "arjun",
     "assetfinder",
+    "dig",
     "dnsx",
     "ffuf",
     "gau",
@@ -71,7 +72,6 @@ KNOWN_TOOLS = {
     "unfurl",
     "waybackurls",
     "whatweb",
-    "dig",
 }
 
 
@@ -89,13 +89,12 @@ def get_env() -> Dict[str, str]:
 
     for directory in FALLBACK_PATHS:
         try:
-            if Path(directory).is_dir():
-                valid_dirs.append(directory)
+            path = Path(directory)
 
-        except PermissionError:
-            continue
+            if path.is_dir():
+                valid_dirs.append(str(path))
 
-        except Exception:
+        except (PermissionError, OSError):
             continue
 
     env["PATH"] = ":".join(valid_dirs) + (
@@ -126,13 +125,10 @@ def find_tool(name: str) -> Optional[str]:
         try:
             path = Path(base) / name
 
-            if path.is_file():
+            if path.is_file() and os.access(path, os.X_OK):
                 return str(path)
 
-        except PermissionError:
-            continue
-
-        except Exception:
+        except (PermissionError, OSError):
             continue
 
     return None
