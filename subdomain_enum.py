@@ -103,11 +103,21 @@ class SubdomainEnumerator:
                 try:
                     results = method()
 
+                    if self.verbose:
+                        console.print(
+                            f"[yellow]{name} raw:[/yellow] "
+                            f"{len(results)}"
+                        )
+
                     with self._lock:
                         before = len(self.found)
 
                         for result in results:
-                            result = result.strip().lower().lstrip("*.")
+                            result = (
+                                result.strip()
+                                .lower()
+                                .lstrip("*.")
+                            )
 
                             if self.domain in result:
                                 self.found.add(result)
@@ -122,7 +132,8 @@ class SubdomainEnumerator:
 
                     if new:
                         console.print(
-                            f"    [green]+{new}[/green] from {name}"
+                            f"    [green]+{new}[/green] "
+                            f"from {name}"
                         )
 
                 except Exception as e:
@@ -155,7 +166,8 @@ class SubdomainEnumerator:
                 new = len(self.found) - before
 
                 console.print(
-                    f"    [green]+{new}[/green] from bruteforce"
+                    f"    [green]+{new}[/green] "
+                    f"from bruteforce"
                 )
 
         # ─── Permutations ──────────────────────────────────────────────
@@ -177,11 +189,27 @@ class SubdomainEnumerator:
 
             if new:
                 console.print(
-                    f"    [green]+{new}[/green] from permutations"
+                    f"    [green]+{new}[/green] "
+                    f"from permutations"
                 )
+
+        # ─── Cleaning ─────────────────────────────────────────────────
+        before_clean = len(self.found)
 
         clean = self._clean(self.found)
 
+        if self.verbose:
+            console.print(
+                f"[yellow]before clean:[/yellow] "
+                f"{before_clean}"
+            )
+
+            console.print(
+                f"[yellow]after clean:[/yellow] "
+                f"{len(clean)}"
+            )
+
+        # ─── Output ───────────────────────────────────────────────────
         if output_file:
             with open(output_file, "w") as f:
                 f.write("\n".join(clean))
@@ -195,17 +223,27 @@ class SubdomainEnumerator:
         clean = set()
 
         pattern = re.compile(
-            r"^(?:[a-zA-Z0-9]"
-            r"(?:[a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+"
-            + re.escape(self.domain)
-            + r"$"
+            rf"(?:[a-zA-Z0-9\-]+\.)+{re.escape(self.domain)}$"
         )
 
         for sub in subs:
-            sub = sub.strip().lower().rstrip(".")
-            sub = re.sub(r"^[*\.\s]+", "", sub)
+            sub = (
+                sub.strip()
+                .lower()
+                .rstrip(".")
+            )
 
-            if sub == self.domain or pattern.match(sub):
+            sub = re.sub(
+                r"^[*\.\s]+",
+                "",
+                sub,
+            )
+
+            if (
+                sub
+                and len(sub) < 255
+                and pattern.search(sub)
+            ):
                 clean.add(sub)
 
         return sorted(clean)
@@ -275,11 +313,18 @@ class SubdomainEnumerator:
         if not tool:
             return []
 
-        return self._run_tool(
-            f"{tool} -d {self.domain} "
-            f"-silent -all -recursive",
+        results = self._run_tool(
+            f"{tool} -d {self.domain} -silent -all",
             300,
         )
+
+        if self.verbose:
+            console.print(
+                f"[yellow]subfinder raw:[/yellow] "
+                f"{len(results)}"
+            )
+
+        return results
 
     def _amass_passive(self):
         tool = find_tool("amass")
@@ -346,10 +391,14 @@ class SubdomainEnumerator:
 
                 for entry in data:
                     for item in entry.get(
-                        "name_value", ""
+                        "name_value",
+                        ""
                     ).splitlines():
 
-                        item = item.strip().lstrip("*.")
+                        item = (
+                            item.strip()
+                            .lstrip("*.")
+                        )
 
                         if self.domain in item:
                             subs.add(item)
@@ -379,10 +428,14 @@ class SubdomainEnumerator:
 
                 for entry in data:
                     for item in entry.get(
-                        "name_value", ""
+                        "name_value",
+                        ""
                     ).splitlines():
 
-                        item = item.strip().lstrip("*.")
+                        item = (
+                            item.strip()
+                            .lstrip("*.")
+                        )
 
                         if self.domain in item:
                             subs.add(item)
@@ -413,7 +466,8 @@ class SubdomainEnumerator:
             if response.ok:
                 for entry in response.json():
                     for name in entry.get(
-                        "dns_names", []
+                        "dns_names",
+                        []
                     ):
 
                         name = name.lstrip("*.")
@@ -472,7 +526,8 @@ class SubdomainEnumerator:
 
             if response.ok:
                 for result in response.json().get(
-                    "results", []
+                    "results",
+                    []
                 ):
 
                     page = result.get("page", {})
@@ -504,7 +559,8 @@ class SubdomainEnumerator:
 
             if response.ok:
                 for item in response.json().get(
-                    "passive_dns", []
+                    "passive_dns",
+                    []
                 ):
 
                     hostname = item.get("hostname")
@@ -548,7 +604,9 @@ class SubdomainEnumerator:
     def _virustotal(self):
         subs = set()
 
-        api_key = self.api_keys.get("virustotal")
+        api_key = self.api_keys.get(
+            "virustotal"
+        )
 
         try:
             headers = {
@@ -567,10 +625,13 @@ class SubdomainEnumerator:
 
                 if response.ok:
                     for item in response.json().get(
-                        "data", []
+                        "data",
+                        []
                     ):
 
-                        subs.add(item.get("id", ""))
+                        subs.add(
+                            item.get("id", "")
+                        )
 
             else:
                 response = requests.get(
@@ -582,10 +643,13 @@ class SubdomainEnumerator:
 
                 if response.ok:
                     for item in response.json().get(
-                        "data", []
+                        "data",
+                        []
                     ):
 
-                        subs.add(item.get("id", ""))
+                        subs.add(
+                            item.get("id", "")
+                        )
 
             time.sleep(0.3)
 
@@ -610,7 +674,10 @@ class SubdomainEnumerator:
             if response.ok:
                 data = response.json()
 
-                for entry in data.get("FDNS_A", []):
+                for entry in data.get(
+                    "FDNS_A",
+                    []
+                ):
                     try:
                         host = entry.split(",")[1]
 
@@ -663,7 +730,8 @@ class SubdomainEnumerator:
 
                 if response.ok:
                     for item in response.json().get(
-                        "items", []
+                        "items",
+                        []
                     ):
 
                         content_url = item.get("url")
@@ -681,7 +749,8 @@ class SubdomainEnumerator:
                             if content_response.ok:
                                 raw = base64.b64decode(
                                     content_response.json().get(
-                                        "content", ""
+                                        "content",
+                                        ""
                                     )
                                 ).decode(
                                     "utf-8",
@@ -716,7 +785,9 @@ class SubdomainEnumerator:
         dnsx = find_tool("dnsx")
 
         tmp = Path(
-            tempfile.mktemp(suffix="_dns.txt")
+            tempfile.mktemp(
+                suffix="_dns.txt"
+            )
         )
 
         with open(wordlist) as f:
@@ -783,7 +854,10 @@ class SubdomainEnumerator:
 
         def resolve(host):
             try:
-                socket.getaddrinfo(host, None)
+                socket.getaddrinfo(
+                    host,
+                    None,
+                )
 
                 with lock:
                     valid.add(host)
@@ -794,7 +868,10 @@ class SubdomainEnumerator:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=max_workers
         ) as executor:
-            executor.map(resolve, hosts)
+            executor.map(
+                resolve,
+                hosts,
+            )
 
         return valid
 
@@ -802,48 +879,54 @@ class SubdomainEnumerator:
     # Permutations
     # ──────────────────────────────────────────────────────────────────────
     def _permutations(self, found_subs):
-        mutations = [
-            "dev",
-            "stg",
-            "staging",
-            "prod",
-            "api",
-            "test",
-            "admin",
-            "app",
-            "beta",
-            "v2",
-            "old",
-            "new",
-            "internal",
-        ]
+        """
+        Generate lightweight realistic permutations
+        from first-level labels only.
 
-        labels = set()
+        Avoids recursive/nested permutation explosions.
+        """
+
+        mutations = {
+            "dev",
+            "staging",
+            "stage",
+            "prod",
+            "test",
+            "beta",
+            "api",
+        }
+
+        base_labels = set()
 
         for sub in found_subs:
-            parts = sub.replace(
-                "." + self.domain,
+            sub = sub.replace(
+                f".{self.domain}",
                 ""
-            ).split(".")
+            )
 
-            labels.update(parts)
-
-        labels -= {"", self.domain}
+            # only first-level labels
+            if "." not in sub:
+                base_labels.add(sub)
 
         candidates = set()
 
-        for label in list(labels)[:30]:
+        for label in base_labels:
+            label = label.strip()
+
+            if not label:
+                continue
+
             for mutation in mutations:
+
+                if label == mutation:
+                    continue
+
                 candidates.add(
                     f"{label}-{mutation}.{self.domain}"
                 )
 
                 candidates.add(
                     f"{mutation}-{label}.{self.domain}"
-                )
-
-                candidates.add(
-                    f"{label}.{mutation}.{self.domain}"
                 )
 
         return list(
