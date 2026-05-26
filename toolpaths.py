@@ -18,7 +18,9 @@ from pathlib import Path
 from typing import Dict, Optional
 
 
-# ─── Common Binary Locations ────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+# Common Binary Locations
+# ────────────────────────────────────────────────────────────────────────────
 FALLBACK_PATHS = [
     os.path.expanduser("~/go/bin"),
     "/usr/local/go/bin",
@@ -30,7 +32,9 @@ FALLBACK_PATHS = [
 ]
 
 
-# ─── Dynamically Include /home/*/go/bin ────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+# Dynamically Include /home/*/go/bin
+# ────────────────────────────────────────────────────────────────────────────
 try:
     for path in Path("/home").glob("*/go/bin"):
         path_str = str(path)
@@ -42,7 +46,9 @@ except (PermissionError, OSError):
     pass
 
 
-# ─── Supported Recon Tooling ───────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+# Supported Recon Tooling
+# ────────────────────────────────────────────────────────────────────────────
 KNOWN_TOOLS = {
     "alterx",
     "amass",
@@ -75,10 +81,12 @@ KNOWN_TOOLS = {
 }
 
 
-# ─── Environment Builder ───────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+# Environment Builder
+# ────────────────────────────────────────────────────────────────────────────
 def get_env() -> Dict[str, str]:
     """
-    Return a subprocess-safe environment with common Go paths injected into PATH.
+    Build a subprocess-safe environment with common Go paths injected into PATH.
     """
 
     env = os.environ.copy()
@@ -97,6 +105,9 @@ def get_env() -> Dict[str, str]:
         except (PermissionError, OSError):
             continue
 
+    # Remove duplicates while preserving order
+    valid_dirs = list(dict.fromkeys(valid_dirs))
+
     env["PATH"] = ":".join(valid_dirs) + (
         ":" + existing_path if existing_path else ""
     )
@@ -104,28 +115,36 @@ def get_env() -> Dict[str, str]:
     return env
 
 
-# ─── Binary Discovery ──────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+# Binary Discovery
+# ────────────────────────────────────────────────────────────────────────────
 def find_tool(name: str) -> Optional[str]:
     """
     Locate a binary by searching:
-    1. system PATH
-    2. fallback binary locations
+        1. system PATH
+        2. fallback binary locations
 
     Returns:
         str: absolute binary path
         None: if not found
     """
 
+    # Check system PATH first
     found = shutil.which(name)
 
     if found:
         return found
 
+    # Check fallback locations
     for base in FALLBACK_PATHS:
         try:
             path = Path(base) / name
 
-            if path.is_file() and os.access(path, os.X_OK):
+            if (
+                path.exists()
+                and path.is_file()
+                and os.access(path, os.X_OK)
+            ):
                 return str(path)
 
         except (PermissionError, OSError):
@@ -134,7 +153,9 @@ def find_tool(name: str) -> Optional[str]:
     return None
 
 
-# ─── Tool Availability Inspection ──────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+# Tool Availability Inspection
+# ────────────────────────────────────────────────────────────────────────────
 def tool_status() -> Dict[str, Optional[str]]:
     """
     Return:
@@ -149,5 +170,19 @@ def tool_status() -> Dict[str, Optional[str]]:
     }
 
 
-# ─── Shared Subprocess Environment ─────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+# Shared Subprocess Environment
+# ────────────────────────────────────────────────────────────────────────────
 ENV = get_env()
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Standalone Testing
+# ────────────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    print("\n[ ReconX Tool Discovery ]\n")
+
+    status = tool_status()
+
+    for tool, path in status.items():
+        print(f"{tool:<20} -> {path}")
