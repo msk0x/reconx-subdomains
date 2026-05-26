@@ -3,8 +3,11 @@
 """
 ReconX Subdomains - CLI Interface
 
-Command-line interface for subdomain enumeration,
-DNS bruteforce, validation, and reconnaissance workflows.
+Command-line interface for:
+- subdomain enumeration
+- DNS bruteforce
+- validation workflows
+- reconnaissance automation
 """
 
 import argparse
@@ -13,6 +16,7 @@ import sys
 import time
 
 from pathlib import Path
+
 from rich.console import Console
 from rich.table import Table
 
@@ -21,10 +25,12 @@ from subdomain_enum import SubdomainEnumerator
 console = Console()
 
 
-# ─── Banner ────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+# Banner
+# ────────────────────────────────────────────────────────────────────────────
 def banner():
     console.print(
-        """
+        r"""
 [bold cyan]
 ██████╗ ███████╗ ██████╗ ██████╗ ███╗   ██╗██╗  ██╗
 ██╔══██╗██╔════╝██╔════╝██╔═══██╗████╗  ██║╚██╗██╔╝
@@ -33,16 +39,23 @@ def banner():
 ██║  ██║███████╗╚██████╗╚██████╔╝██║ ╚████║██╔╝ ██╗
 ╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═╝
 
-        Subdomain Enumeration Engine
+        ReconX Subdomains
+        Advanced Enumeration Engine
 [/bold cyan]
 """
     )
 
 
-# ─── Argument Parser ───────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+# Argument Parser
+# ────────────────────────────────────────────────────────────────────────────
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="ReconX Subdomains - Advanced Subdomain Enumeration Engine"
+        prog="reconx-subdomains",
+        description=(
+            "Advanced subdomain enumeration engine for "
+            "offensive security and reconnaissance workflows."
+        ),
     )
 
     parser.add_argument(
@@ -76,7 +89,7 @@ def parse_args():
     parser.add_argument(
         "-o",
         "--output",
-        help="Output file",
+        help="Output file path",
     )
 
     parser.add_argument(
@@ -104,7 +117,9 @@ def parse_args():
     return parser.parse_args()
 
 
-# ─── Output Helpers ────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+# Output Helpers
+# ────────────────────────────────────────────────────────────────────────────
 def save_json(results, output_path):
     data = {
         "count": len(results),
@@ -115,14 +130,18 @@ def save_json(results, output_path):
     with open(output_path, "w") as f:
         json.dump(data, f, indent=4)
 
-    console.print(f"[green][+][/green] JSON saved → {output_path}")
+    console.print(
+        f"[green][+][/green] JSON saved → {output_path}"
+    )
 
 
 def save_text(results, output_path):
     with open(output_path, "w") as f:
         f.write("\n".join(sorted(results)))
 
-    console.print(f"[green][+][/green] Output saved → {output_path}")
+    console.print(
+        f"[green][+][/green] Output saved → {output_path}"
+    )
 
 
 def print_summary(results, elapsed):
@@ -133,15 +152,60 @@ def print_summary(results, elapsed):
     table.add_column("Metric", style="cyan")
     table.add_column("Value", style="green")
 
-    table.add_row("Total Subdomains", str(len(results)))
-    table.add_row("Execution Time", f"{elapsed:.2f}s")
+    table.add_row(
+        "Total Subdomains",
+        str(len(results))
+    )
+
+    table.add_row(
+        "Execution Time",
+        f"{elapsed:.2f}s"
+    )
 
     console.print(table)
 
 
-# ─── Main ──────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────────────────
+# Validation
+# ────────────────────────────────────────────────────────────────────────────
+def validate_args(args):
+    if args.bruteforce and not args.wordlist:
+        console.print(
+            "[red]DNS bruteforce requires a wordlist.[/red]"
+        )
+
+        console.print(
+            "[yellow]Use:[/yellow] "
+            "-b -w wordlist.txt"
+        )
+
+        sys.exit(1)
+
+    if args.wordlist:
+        wordlist = Path(args.wordlist)
+
+        if not wordlist.exists():
+            console.print(
+                f"[red]Wordlist not found:[/red] {wordlist}"
+            )
+
+            sys.exit(1)
+
+    if args.threads <= 0:
+        console.print(
+            "[red]Thread count must be greater than 0.[/red]"
+        )
+
+        sys.exit(1)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Main
+# ────────────────────────────────────────────────────────────────────────────
 def main():
     args = parse_args()
+
+    validate_args(args)
 
     banner()
 
@@ -163,36 +227,58 @@ def main():
         results = enum.run(
             bruteforce=args.bruteforce,
             dns_wordlist=args.wordlist,
-            output_file=args.output if not args.json else None,
+            output_file=(
+                args.output
+                if args.output and not args.json
+                else None
+            ),
         )
 
         elapsed = time.time() - start
 
-        # ─── Print Results ────────────────────────────────────────────────
+        # ────────────────────────────────────────────────────────────────
+        # Print Results
+        # ────────────────────────────────────────────────────────────────
         console.print()
 
         for subdomain in sorted(results):
-            console.print(f"[green]{subdomain}[/green]")
+            console.print(
+                f"[green]{subdomain}[/green]"
+            )
 
-        # ─── Save JSON ───────────────────────────────────────────────────
+        # ────────────────────────────────────────────────────────────────
+        # Save JSON
+        # ────────────────────────────────────────────────────────────────
         if args.json:
-            output_file = args.output or f"{args.domain}_subdomains.json"
+            output_file = (
+                args.output
+                or f"{args.domain}_subdomains.json"
+            )
 
             save_json(results, output_file)
 
-        # ─── Save TXT ────────────────────────────────────────────────────
+        # ────────────────────────────────────────────────────────────────
+        # Save TXT
+        # ────────────────────────────────────────────────────────────────
         elif args.output:
             save_text(results, args.output)
 
-        # ─── Summary ─────────────────────────────────────────────────────
+        # ────────────────────────────────────────────────────────────────
+        # Summary
+        # ────────────────────────────────────────────────────────────────
         print_summary(results, elapsed)
 
     except KeyboardInterrupt:
-        console.print("\n[red]Interrupted by user[/red]")
+        console.print(
+            "\n[red]Interrupted by user[/red]"
+        )
+
         sys.exit(1)
 
     except Exception as e:
-        console.print(f"\n[red]Fatal Error:[/red] {e}")
+        console.print(
+            f"\n[red]Fatal Error:[/red] {e}"
+        )
 
         if args.verbose:
             raise
@@ -200,5 +286,8 @@ def main():
         sys.exit(1)
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Entrypoint
+# ────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     main()
