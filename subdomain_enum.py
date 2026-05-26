@@ -8,9 +8,11 @@ attack surface mapping, and reconnaissance workflows.
 import base64
 import concurrent.futures
 import json
+import random
 import re
 import requests
 import socket
+import string
 import subprocess
 import tempfile
 import threading
@@ -20,7 +22,11 @@ from pathlib import Path
 from typing import List, Set
 
 from rich.console import Console
-from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.progress import (
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+)
 
 from toolpaths import find_tool, ENV as _ENV
 
@@ -38,6 +44,7 @@ class SubdomainEnumerator:
         api_keys: dict = None,
     ):
         self.domain = domain.strip().lower()
+
         self.threads = threads
         self.verbose = verbose
         self.timeout = 20
@@ -49,18 +56,22 @@ class SubdomainEnumerator:
         self._lock = threading.Lock()
 
         self._sess = requests.Session()
+
         self._sess.headers.update({
             "User-Agent": UA
         })
+
+        self.wildcard_ips = self._detect_wildcard()
 
     # ──────────────────────────────────────────────────────────────────────
     # Main Runner
     # ──────────────────────────────────────────────────────────────────────
     def run(
         self,
-        bruteforce: bool = True,
+        bruteforce: bool = False,
         dns_wordlist: str = None,
         output_file: str = None,
+        enable_permutations: bool = False,
     ) -> List[str]:
 
         console.print(
@@ -72,16 +83,13 @@ class SubdomainEnumerator:
             ("amass", self._amass_passive),
             ("assetfinder", self._assetfinder),
             ("crt.sh", self._crtsh),
-            ("crt.sh v2", self._crtsh_v2),
             ("certspotter", self._certspotter),
             ("waybackurls", self._wayback),
             ("gau", self._gau),
-            ("hackertarget", self._hackertarget),
             ("rapiddns", self._rapiddns),
             ("urlscan", self._urlscan),
             ("alienvault", self._alienvault),
             ("jldc", self._jldc),
-            ("anubis", self._anubis),
             ("virustotal", self._virustotal),
             ("github", self._github_dork),
             ("bufferover", self._bufferover),
@@ -89,13 +97,20 @@ class SubdomainEnumerator:
 
         with Progress(
             SpinnerColumn(),
-            TextColumn("[cyan]{task.description:<20}[/cyan]"),
-            TextColumn("[green]{task.fields[found]} found[/green]"),
+            TextColumn(
+                "[cyan]{task.description:<20}[/cyan]"
+            ),
+            TextColumn(
+                "[green]{task.fields[found]} found[/green]"
+            ),
             console=console,
         ) as progress:
 
             tasks = {
-                name: progress.add_task(name, found=0)
+                name: progress.add_task(
+                    name,
+                    found=0,
+                )
                 for name, _ in methods
             }
 
@@ -109,20 +124,22 @@ class SubdomainEnumerator:
                             f"{len(results)}"
                         )
 
-                    with self._lock:
-                        before = len(self.found)
+                    before = len(self.found)
 
-                        for result in results:
-                            result = (
-                                result.strip()
-                                .lower()
-                                .lstrip("*.")
-                            )
+                    for result in results:
+                        result = (
+                            result.strip()
+                            .lower()
+                            .lstrip("*.")
+                        )
 
-                            if self.domain in result:
-                                self.found.add(result)
+                        if (
+                            self.domain in result
+                            and self._is_valid_hostname(result)
+                        ):
+                            self.found.add(result)
 
-                        new = len(self.found) - before
+                    new = len(self.found) - before
 
                     progress.update(
                         tasks[name],
@@ -148,68 +165,62 @@ class SubdomainEnumerator:
                             f"[red]{name}: {e}[/red]"
                         )
 
-        # ─── Bruteforce ────────────────────────────────────────────────
+        # ──────────────────────────────────────────────────────────────
+        # DNS Bruteforce
+        # ──────────────────────────────────────────────────────────────
         if bruteforce and dns_wordlist:
-            if Path(dns_wordlist).exists():
-
-                console.print(
-                    f"\n  [cyan]DNS Bruteforce:[/cyan] "
-                    f"{dns_wordlist}"
-                )
-
-                brute = self._dns_bruteforce(dns_wordlist)
-
-                before = len(self.found)
-
-                self.found.update(brute)
-
-                new = len(self.found) - before
-
-                console.print(
-                    f"    [green]+{new}[/green] "
-                    f"from bruteforce"
-                )
-
-        # ─── Permutations ──────────────────────────────────────────────
-        perms = self._permutations(list(self.found))
-
-        if perms:
             console.print(
-                f"\n  [cyan]Permutation validation:[/cyan] "
-                f"{len(perms)} candidates"
+                f"\n  [cyan]DNS Bruteforce:[/cyan]"
             )
 
-            valid = self._resolve_batch(perms)
+            brute = self._dns_bruteforce(
+                dns_wordlist
+            )
 
             before = len(self.found)
 
-            self.found.update(valid)
+            self.found.update(brute)
 
             new = len(self.found) - before
 
             if new:
                 console.print(
                     f"    [green]+{new}[/green] "
-                    f"from permutations"
+                    f"from bruteforce"
                 )
 
-        # ─── Cleaning ─────────────────────────────────────────────────
-        before_clean = len(self.found)
+        # ──────────────────────────────────────────────────────────────
+        # Optional Permutations
+        # ──────────────────────────────────────────────────────────────
+        if enable_permutations:
+            perms = self._permutations(
+                list(self.found)
+            )
+
+            if perms:
+                console.print(
+                    f"\n  [cyan]Permutation validation:[/cyan] "
+                    f"{len(perms)} candidates"
+                )
+
+                valid = self._resolve_batch(
+                    perms
+                )
+
+                before = len(self.found)
+
+                self.found.update(valid)
+
+                new = len(self.found) - before
+
+                if new:
+                    console.print(
+                        f"    [green]+{new}[/green] "
+                        f"from permutations"
+                    )
 
         clean = self._clean(self.found)
 
-        if self.verbose:
-            console.print(
-                f"[yellow]before clean:[/yellow] "
-                f"{before_clean}"
-            )
-
-            console.print(
-                f"[yellow]after clean:[/yellow] "
-                f"{len(clean)}"
-            )
-
-        # ─── Output ───────────────────────────────────────────────────
         if output_file:
             with open(output_file, "w") as f:
                 f.write("\n".join(clean))
@@ -219,11 +230,12 @@ class SubdomainEnumerator:
     # ──────────────────────────────────────────────────────────────────────
     # Cleaning
     # ──────────────────────────────────────────────────────────────────────
-    def _clean(self, subs: Set[str]) -> List[str]:
+    def _clean(self, subs):
         clean = set()
 
         pattern = re.compile(
-            rf"(?:[a-zA-Z0-9\-]+\.)+{re.escape(self.domain)}$"
+            rf"(?:[a-zA-Z0-9\-]+\.)+"
+            rf"{re.escape(self.domain)}$"
         )
 
         for sub in subs:
@@ -249,9 +261,68 @@ class SubdomainEnumerator:
         return sorted(clean)
 
     # ──────────────────────────────────────────────────────────────────────
+    # Wildcard Detection
+    # ──────────────────────────────────────────────────────────────────────
+    def _detect_wildcard(self):
+        try:
+            rand = "".join(
+                random.choices(
+                    string.ascii_lowercase,
+                    k=18,
+                )
+            )
+
+            test_host = (
+                f"{rand}.{self.domain}"
+            )
+
+            infos = socket.getaddrinfo(
+                test_host,
+                None,
+            )
+
+            return {
+                info[4][0]
+                for info in infos
+            }
+
+        except Exception:
+            return set()
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Validation
+    # ──────────────────────────────────────────────────────────────────────
+    def _is_valid_hostname(self, host):
+        try:
+            infos = socket.getaddrinfo(
+                host,
+                None,
+            )
+
+            ips = {
+                info[4][0]
+                for info in infos
+            }
+
+            if (
+                self.wildcard_ips
+                and ips == self.wildcard_ips
+            ):
+                return False
+
+            return True
+
+        except Exception:
+            return False
+
+    # ──────────────────────────────────────────────────────────────────────
     # Helpers
     # ──────────────────────────────────────────────────────────────────────
-    def _run_tool(self, cmd, timeout=180):
+    def _run_tool(
+        self,
+        cmd,
+        timeout=180,
+    ):
         try:
             result = subprocess.run(
                 cmd,
@@ -269,15 +340,15 @@ class SubdomainEnumerator:
                 if line.strip()
             ]
 
-        except Exception as e:
-            if self.verbose:
-                console.print(
-                    f"[red]Tool error:[/red] {e}"
-                )
-
+        except Exception:
             return []
 
-    def _get(self, url, timeout=None, json_resp=False):
+    def _get(
+        self,
+        url,
+        timeout=None,
+        json_resp=False,
+    ):
         try:
             timeout = timeout or self.timeout
 
@@ -286,9 +357,6 @@ class SubdomainEnumerator:
                 timeout=timeout,
             )
 
-            if len(response.text) > 15_000_000:
-                return None
-
             if response.ok:
                 return (
                     response.json()
@@ -296,11 +364,8 @@ class SubdomainEnumerator:
                     else response.text
                 )
 
-        except Exception as e:
-            if self.verbose:
-                console.print(
-                    f"[red]GET error:[/red] {e}"
-                )
+        except Exception:
+            return None
 
         return None
 
@@ -313,18 +378,10 @@ class SubdomainEnumerator:
         if not tool:
             return []
 
-        results = self._run_tool(
+        return self._run_tool(
             f"{tool} -d {self.domain} -silent -all",
             300,
         )
-
-        if self.verbose:
-            console.print(
-                f"[yellow]subfinder raw:[/yellow] "
-                f"{len(results)}"
-            )
-
-        return results
 
     def _amass_passive(self):
         tool = find_tool("amass")
@@ -374,7 +431,7 @@ class SubdomainEnumerator:
         return self._extract_subs(lines)
 
     # ──────────────────────────────────────────────────────────────────────
-    # HTTP Sources
+    # Passive APIs
     # ──────────────────────────────────────────────────────────────────────
     def _crtsh(self):
         subs = set()
@@ -382,7 +439,9 @@ class SubdomainEnumerator:
         try:
             response = requests.get(
                 f"https://crt.sh/?q=%.{self.domain}&output=json",
-                headers={"User-Agent": UA},
+                headers={
+                    "User-Agent": UA
+                },
                 timeout=self.timeout,
             )
 
@@ -392,61 +451,16 @@ class SubdomainEnumerator:
                 for entry in data:
                     for item in entry.get(
                         "name_value",
-                        ""
+                        "",
                     ).splitlines():
 
-                        item = (
-                            item.strip()
-                            .lstrip("*.")
-                        )
+                        item = item.strip().lstrip("*.")
 
                         if self.domain in item:
                             subs.add(item)
 
-            time.sleep(0.3)
-
-        except Exception as e:
-            if self.verbose:
-                console.print(
-                    f"[red]crt.sh:[/red] {e}"
-                )
-
-        return list(subs)
-
-    def _crtsh_v2(self):
-        subs = set()
-
-        try:
-            response = requests.get(
-                f"https://crt.sh/?q=%.%.{self.domain}&output=json",
-                headers={"User-Agent": UA},
-                timeout=self.timeout,
-            )
-
-            if response.ok:
-                data = response.json()
-
-                for entry in data:
-                    for item in entry.get(
-                        "name_value",
-                        ""
-                    ).splitlines():
-
-                        item = (
-                            item.strip()
-                            .lstrip("*.")
-                        )
-
-                        if self.domain in item:
-                            subs.add(item)
-
-            time.sleep(0.3)
-
-        except Exception as e:
-            if self.verbose:
-                console.print(
-                    f"[red]crt.sh v2:[/red] {e}"
-                )
+        except Exception:
+            pass
 
         return list(subs)
 
@@ -460,14 +474,16 @@ class SubdomainEnumerator:
                 "&include_subdomains=true"
                 "&expand=dns_names",
                 timeout=self.timeout,
-                headers={"User-Agent": UA},
+                headers={
+                    "User-Agent": UA
+                },
             )
 
             if response.ok:
                 for entry in response.json():
                     for name in entry.get(
                         "dns_names",
-                        []
+                        [],
                     ):
 
                         name = name.lstrip("*.")
@@ -475,40 +491,23 @@ class SubdomainEnumerator:
                         if self.domain in name:
                             subs.add(name)
 
-            time.sleep(0.3)
-
-        except Exception as e:
-            if self.verbose:
-                console.print(
-                    f"[red]certspotter:[/red] {e}"
-                )
+        except Exception:
+            pass
 
         return list(subs)
 
-    def _hackertarget(self):
-        text = self._get(
-            f"https://api.hackertarget.com/hostsearch/?q={self.domain}"
-        )
-
-        if not text:
-            return []
-
-        return [
-            line.split(",")[0]
-            for line in text.splitlines()
-            if self.domain in line
-        ]
-
     def _rapiddns(self):
         text = self._get(
-            f"https://rapiddns.io/subdomain/{self.domain}?full=1"
+            f"https://rapiddns.io/subdomain/"
+            f"{self.domain}?full=1"
         )
 
         if not text:
             return []
 
         matches = re.findall(
-            rf"[a-zA-Z0-9_\-\.]+\.{re.escape(self.domain)}",
+            rf"[a-zA-Z0-9_\-\.]+"
+            rf"\.{re.escape(self.domain)}",
             text,
         )
 
@@ -519,30 +518,37 @@ class SubdomainEnumerator:
 
         try:
             response = requests.get(
-                f"https://urlscan.io/api/v1/search/?q=domain:{self.domain}",
+                f"https://urlscan.io/api/v1/search/"
+                f"?q=domain:{self.domain}",
                 timeout=self.timeout,
-                headers={"User-Agent": UA},
+                headers={
+                    "User-Agent": UA
+                },
             )
 
             if response.ok:
                 for result in response.json().get(
                     "results",
-                    []
+                    [],
                 ):
 
-                    page = result.get("page", {})
-                    domain = page.get("domain")
+                    page = result.get(
+                        "page",
+                        {},
+                    )
 
-                    if domain and self.domain in domain:
+                    domain = page.get(
+                        "domain"
+                    )
+
+                    if (
+                        domain
+                        and self.domain in domain
+                    ):
                         subs.add(domain)
 
-            time.sleep(0.3)
-
-        except Exception as e:
-            if self.verbose:
-                console.print(
-                    f"[red]urlscan:[/red] {e}"
-                )
+        except Exception:
+            pass
 
         return list(subs)
 
@@ -554,33 +560,36 @@ class SubdomainEnumerator:
                 f"https://otx.alienvault.com/api/v1/"
                 f"indicators/domain/{self.domain}/passive_dns",
                 timeout=self.timeout,
-                headers={"User-Agent": UA},
+                headers={
+                    "User-Agent": UA
+                },
             )
 
             if response.ok:
                 for item in response.json().get(
                     "passive_dns",
-                    []
+                    [],
                 ):
 
-                    hostname = item.get("hostname")
+                    hostname = item.get(
+                        "hostname"
+                    )
 
-                    if hostname and self.domain in hostname:
+                    if (
+                        hostname
+                        and self.domain in hostname
+                    ):
                         subs.add(hostname)
 
-            time.sleep(0.3)
-
-        except Exception as e:
-            if self.verbose:
-                console.print(
-                    f"[red]alienvault:[/red] {e}"
-                )
+        except Exception:
+            pass
 
         return list(subs)
 
     def _jldc(self):
         text = self._get(
-            f"https://jldc.me/anubis/subdomains/{self.domain}"
+            f"https://jldc.me/anubis/subdomains/"
+            f"{self.domain}"
         )
 
         if not text:
@@ -598,9 +607,6 @@ class SubdomainEnumerator:
         except Exception:
             return []
 
-    def _anubis(self):
-        return self._jldc()
-
     def _virustotal(self):
         subs = set()
 
@@ -608,56 +614,34 @@ class SubdomainEnumerator:
             "virustotal"
         )
 
+        if not api_key:
+            return []
+
         try:
             headers = {
-                "User-Agent": UA
+                "x-apikey": api_key,
+                "User-Agent": UA,
             }
 
-            if api_key:
-                headers["x-apikey"] = api_key
+            response = requests.get(
+                f"https://www.virustotal.com/api/v3/"
+                f"domains/{self.domain}/subdomains?limit=1000",
+                headers=headers,
+                timeout=self.timeout,
+            )
 
-                response = requests.get(
-                    f"https://www.virustotal.com/api/v3/"
-                    f"domains/{self.domain}/subdomains?limit=1000",
-                    headers=headers,
-                    timeout=self.timeout,
-                )
+            if response.ok:
+                for item in response.json().get(
+                    "data",
+                    [],
+                ):
 
-                if response.ok:
-                    for item in response.json().get(
-                        "data",
-                        []
-                    ):
+                    subs.add(
+                        item.get("id", "")
+                    )
 
-                        subs.add(
-                            item.get("id", "")
-                        )
-
-            else:
-                response = requests.get(
-                    f"https://www.virustotal.com/ui/"
-                    f"domains/{self.domain}/subdomains?limit=40",
-                    headers=headers,
-                    timeout=self.timeout,
-                )
-
-                if response.ok:
-                    for item in response.json().get(
-                        "data",
-                        []
-                    ):
-
-                        subs.add(
-                            item.get("id", "")
-                        )
-
-            time.sleep(0.3)
-
-        except Exception as e:
-            if self.verbose:
-                console.print(
-                    f"[red]virustotal:[/red] {e}"
-                )
+        except Exception:
+            pass
 
         return list(subs)
 
@@ -668,7 +652,9 @@ class SubdomainEnumerator:
             response = requests.get(
                 f"https://dns.bufferover.run/dns?q=.{self.domain}",
                 timeout=self.timeout,
-                headers={"User-Agent": UA},
+                headers={
+                    "User-Agent": UA
+                },
             )
 
             if response.ok:
@@ -676,8 +662,9 @@ class SubdomainEnumerator:
 
                 for entry in data.get(
                     "FDNS_A",
-                    []
+                    [],
                 ):
+
                     try:
                         host = entry.split(",")[1]
 
@@ -687,20 +674,17 @@ class SubdomainEnumerator:
                     except Exception:
                         continue
 
-            time.sleep(0.3)
-
-        except Exception as e:
-            if self.verbose:
-                console.print(
-                    f"[red]bufferover:[/red] {e}"
-                )
+        except Exception:
+            pass
 
         return list(subs)
 
     def _github_dork(self):
         subs = set()
 
-        token = self.api_keys.get("github")
+        token = self.api_keys.get(
+            "github"
+        )
 
         if not token:
             return []
@@ -712,7 +696,6 @@ class SubdomainEnumerator:
 
         queries = [
             f'"{self.domain}"',
-            f"site:{self.domain}",
         ]
 
         for query in queries:
@@ -720,7 +703,7 @@ class SubdomainEnumerator:
                 response = requests.get(
                     f"https://api.github.com/search/code"
                     f"?q={requests.utils.quote(query)}"
-                    f"&per_page=50",
+                    f"&per_page=25",
                     headers=headers,
                     timeout=self.timeout,
                 )
@@ -731,10 +714,12 @@ class SubdomainEnumerator:
                 if response.ok:
                     for item in response.json().get(
                         "items",
-                        []
+                        [],
                     ):
 
-                        content_url = item.get("url")
+                        content_url = item.get(
+                            "url"
+                        )
 
                         if not content_url:
                             continue
@@ -750,11 +735,11 @@ class SubdomainEnumerator:
                                 raw = base64.b64decode(
                                     content_response.json().get(
                                         "content",
-                                        ""
+                                        "",
                                     )
                                 ).decode(
                                     "utf-8",
-                                    errors="ignore"
+                                    errors="ignore",
                                 )
 
                                 matches = re.findall(
@@ -768,21 +753,19 @@ class SubdomainEnumerator:
                         except Exception:
                             continue
 
-                time.sleep(1)
-
-            except Exception as e:
-                if self.verbose:
-                    console.print(
-                        f"[red]github:[/red] {e}"
-                    )
+            except Exception:
+                pass
 
         return list(subs)
 
     # ──────────────────────────────────────────────────────────────────────
-    # DNS Bruteforce
+    # Bruteforce
     # ──────────────────────────────────────────────────────────────────────
     def _dns_bruteforce(self, wordlist):
         dnsx = find_tool("dnsx")
+
+        if not dnsx:
+            return []
 
         tmp = Path(
             tempfile.mktemp(
@@ -795,7 +778,6 @@ class SubdomainEnumerator:
                 line.strip()
                 for line in f
                 if line.strip()
-                and not line.startswith("#")
             ]
 
         with open(tmp, "w") as f:
@@ -804,32 +786,16 @@ class SubdomainEnumerator:
                     f"{word}.{self.domain}\n"
                 )
 
-        results = set()
+        cmd = (
+            f"{dnsx} -l {tmp} "
+            f"-silent -resp-only "
+            f"-t {min(self.threads * 2, 100)}"
+        )
 
-        if dnsx:
-            cmd = (
-                f"{dnsx} -l {tmp} "
-                f"-silent -resp-only "
-                f"-t {min(self.threads * 2, 100)}"
-            )
-
-            results.update(
-                self._run_tool(
-                    cmd,
-                    timeout=600
-                )
-            )
-
-        else:
-            console.print(
-                "[yellow]dnsx not found "
-                "— fallback resolver enabled[/yellow]"
-            )
-
-            results = self._resolve_batch([
-                f"{word}.{self.domain}"
-                for word in words[:5000]
-            ])
+        results = self._run_tool(
+            cmd,
+            timeout=600,
+        )
 
         try:
             tmp.unlink()
@@ -837,55 +803,12 @@ class SubdomainEnumerator:
         except Exception:
             pass
 
-        return list(results)
-
-    # ──────────────────────────────────────────────────────────────────────
-    # DNS Resolution
-    # ──────────────────────────────────────────────────────────────────────
-    def _resolve_batch(
-        self,
-        hosts,
-        max_workers=50,
-    ):
-
-        valid = set()
-
-        lock = threading.Lock()
-
-        def resolve(host):
-            try:
-                socket.getaddrinfo(
-                    host,
-                    None,
-                )
-
-                with lock:
-                    valid.add(host)
-
-            except Exception:
-                return
-
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=max_workers
-        ) as executor:
-            executor.map(
-                resolve,
-                hosts,
-            )
-
-        return valid
+        return results
 
     # ──────────────────────────────────────────────────────────────────────
     # Permutations
     # ──────────────────────────────────────────────────────────────────────
     def _permutations(self, found_subs):
-        """
-        Generate lightweight realistic permutations
-        from first-level labels only.
-
-        Avoids recursive/nested permutation explosions.
-        """
-
         mutations = {
             "dev",
             "staging",
@@ -904,18 +827,12 @@ class SubdomainEnumerator:
                 ""
             )
 
-            # only first-level labels
             if "." not in sub:
                 base_labels.add(sub)
 
         candidates = set()
 
         for label in base_labels:
-            label = label.strip()
-
-            if not label:
-                continue
-
             for mutation in mutations:
 
                 if label == mutation:
@@ -934,13 +851,38 @@ class SubdomainEnumerator:
         )
 
     # ──────────────────────────────────────────────────────────────────────
-    # URL Extraction Helpers
+    # DNS Resolution
+    # ──────────────────────────────────────────────────────────────────────
+    def _resolve_batch(
+        self,
+        hosts,
+        max_workers=50,
+    ):
+        valid = set()
+
+        lock = threading.Lock()
+
+        def resolve(host):
+            if self._is_valid_hostname(host):
+                with lock:
+                    valid.add(host)
+
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max_workers
+        ) as executor:
+            executor.map(resolve, hosts)
+
+        return valid
+
+    # ──────────────────────────────────────────────────────────────────────
+    # Helpers
     # ──────────────────────────────────────────────────────────────────────
     def _extract_subs(self, lines):
         subs = set()
 
         regex = re.compile(
-            rf"[a-zA-Z0-9_\-\.]+\.{re.escape(self.domain)}"
+            rf"[a-zA-Z0-9_\-\.]+"
+            rf"\.{re.escape(self.domain)}"
         )
 
         for line in lines:
