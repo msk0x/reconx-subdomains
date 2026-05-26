@@ -8,7 +8,7 @@ Features:
 - Go binary path injection
 - fallback binary resolution
 - subprocess-safe environment generation
-- optional tool status inspection
+- tool availability inspection
 """
 
 import os
@@ -44,6 +44,14 @@ try:
 
 except (PermissionError, OSError):
     pass
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Remove Duplicates While Preserving Order
+# ────────────────────────────────────────────────────────────────────────────
+FALLBACK_PATHS = list(
+    dict.fromkeys(FALLBACK_PATHS)
+)
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -86,7 +94,8 @@ KNOWN_TOOLS = {
 # ────────────────────────────────────────────────────────────────────────────
 def get_env() -> Dict[str, str]:
     """
-    Build a subprocess-safe environment with common Go paths injected into PATH.
+    Build a subprocess-safe environment with common
+    Go binary paths injected into PATH.
     """
 
     env = os.environ.copy()
@@ -99,17 +108,21 @@ def get_env() -> Dict[str, str]:
         try:
             path = Path(directory)
 
-            if path.is_dir():
+            if path.exists() and path.is_dir():
                 valid_dirs.append(str(path))
 
         except (PermissionError, OSError):
             continue
 
     # Remove duplicates while preserving order
-    valid_dirs = list(dict.fromkeys(valid_dirs))
+    valid_dirs = list(
+        dict.fromkeys(valid_dirs)
+    )
 
     env["PATH"] = ":".join(valid_dirs) + (
-        ":" + existing_path if existing_path else ""
+        ":" + existing_path
+        if existing_path
+        else ""
     )
 
     return env
